@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-视频排贴命名工具 v1.0
+视频排贴命名工具 v1.1.1
 专为 Facebook 资源视频排贴命名设计
 依赖：pip install customtkinter
 可选：pip install tkinterdnd2  （拖放）
@@ -26,6 +26,9 @@ import string
 import datetime
 import calendar
 import math
+import threading
+import urllib.request
+import json
 from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox
@@ -143,11 +146,137 @@ def _apply_theme(mode: str = "light"):
 _apply_theme("light")
 
 # ── 常量 ─────────────────────────────────────────────────────────
+CURRENT_VERSION = 'v1.1.1'
+GITHUB_REPO     = 'secure-artifacts/video-rename-tool'
 CN_NUMS    = ['1','2','3','4','5','6','7','8']
 VIDEO_EXTS = {'.mp4','.mov','.avi','.mkv','.flv','.wmv',
               '.m4v','.webm','.ts','.rmvb','.3gp','.mts'}
 FC         = '：'
 
+
+
+# ════════════════════════════════════════════════════════════════
+#  版本检测
+# ════════════════════════════════════════════════════════════════
+
+def _fetch_latest():
+    """联网获取最新版本，返回 (latest_tag, html_url) 或 (None, None)。"""
+    try:
+        url = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            data = json.loads(resp.read().decode())
+        latest = data.get("tag_name", "").strip()
+        return (latest, data.get("html_url", "")) if latest else (None, None)
+    except Exception:
+        return None, None
+
+
+def check_update_silent(root, callback):
+    """启动时后台静默检测，结果通过 callback(state, latest, url) 更新按钮。"""
+    def _run():
+        latest, url = _fetch_latest()
+        if latest is None:
+            root.after(0, lambda: callback("none", None, None))
+        elif latest != CURRENT_VERSION:
+            root.after(0, lambda: callback("has_update", latest, url))
+        else:
+            root.after(0, lambda: callback("latest", latest, None))
+    threading.Thread(target=_run, daemon=True).start()
+
+
+def check_update_manual(root, callback):
+    """手动点击时联网检测，结果更新按钮 + 弹窗反馈。"""
+    def _run():
+        latest, url = _fetch_latest()
+        if latest is None:
+            root.after(0, lambda: _dlg_fail(root))
+        elif latest != CURRENT_VERSION:
+            root.after(0, lambda: callback("has_update", latest, url))
+            root.after(0, lambda: _dlg_update(root, latest, url))
+        else:
+            root.after(0, lambda: callback("latest", latest, None))
+            root.after(0, lambda: _dlg_latest(root, latest))
+    threading.Thread(target=_run, daemon=True).start()
+
+
+def _dlg_base(root, title):
+    win = tk.Toplevel(root)
+    win.title(title)
+    win.configure(bg=CARD)
+    win.resizable(False, False)
+    win.grab_set()
+    win.attributes("-topmost", True)
+    return win
+
+def _dlg_center(win, root):
+    win.update_idletasks()
+    x = root.winfo_x() + (root.winfo_width()  - win.winfo_width())  // 2
+    y = root.winfo_y() + (root.winfo_height() - win.winfo_height()) // 2
+    win.geometry(f"+{x}+{y}")
+
+def _close_btn(win):
+    ctk.CTkButton(win, text="好的", width=90, height=32,
+                  fg_color=CARD2, hover_color=BORDER,
+                  border_width=1, border_color=BORDER,
+                  text_color=DIM, corner_radius=8,
+                  font=ctk.CTkFont(size=12),
+                  command=win.destroy).pack(pady=(0, 18))
+
+
+def _dlg_update(root, latest, html_url):
+    win = _dlg_base(root, "发现新版本")
+    ctk.CTkLabel(win, text="🎉  发现新版本！",
+                 font=ctk.CTkFont(size=15, weight="bold"),
+                 text_color=ACCENT).pack(padx=28, pady=(20, 4), anchor="w")
+    ctk.CTkFrame(win, height=1, fg_color=BORDER).pack(fill="x", padx=24, pady=(0, 12))
+    info = tk.Frame(win, bg=CARD)
+    info.pack(padx=28, pady=(0, 4), anchor="w")
+    tk.Label(info, text=f"当前版本：{CURRENT_VERSION}", bg=CARD, fg=DIM,
+             font=("Microsoft YaHei UI", 11)).pack(anchor="w")
+    tk.Label(info, text=f"最新版本：{latest}", bg=CARD, fg=GREEN,
+             font=("Microsoft YaHei UI", 11, "bold")).pack(anchor="w", pady=(4, 0))
+    tk.Label(win, text="是否前往 GitHub Releases 下载最新版本？",
+             bg=CARD, fg=TEXT2, font=("Microsoft YaHei UI", 10)).pack(padx=28, pady=(10, 16), anchor="w")
+    btn_row = tk.Frame(win, bg=CARD)
+    btn_row.pack(padx=24, pady=(0, 18))
+    def _open():
+        import webbrowser
+        webbrowser.open(html_url)
+        win.destroy()
+    ctk.CTkButton(btn_row, text="前往下载", width=110, height=32,
+                  fg_color=ACCENT, hover_color=ACCENT2, text_color="#FFF",
+                  corner_radius=8, font=ctk.CTkFont(size=12),
+                  command=_open).pack(side="left", padx=(0, 10))
+    ctk.CTkButton(btn_row, text="稍后再说", width=90, height=32,
+                  fg_color=CARD2, hover_color=BORDER, border_width=1,
+                  border_color=BORDER, text_color=DIM, corner_radius=8,
+                  font=ctk.CTkFont(size=12), command=win.destroy).pack(side="left")
+    _dlg_center(win, root)
+
+
+def _dlg_latest(root, latest):
+    win = _dlg_base(root, "检查更新")
+    ctk.CTkLabel(win, text="✓  已是最新版本",
+                 font=ctk.CTkFont(size=15, weight="bold"),
+                 text_color=GREEN).pack(padx=28, pady=(20, 4), anchor="w")
+    ctk.CTkFrame(win, height=1, fg_color=BORDER).pack(fill="x", padx=24, pady=(0, 12))
+    tk.Label(win, text=f"当前版本 {latest} 已是最新，无需更新。",
+             bg=CARD, fg=TEXT2, font=("Microsoft YaHei UI", 11)).pack(padx=28, pady=(4, 16), anchor="w")
+    _close_btn(win)
+    _dlg_center(win, root)
+
+
+def _dlg_fail(root):
+    win = _dlg_base(root, "检查更新")
+    ctk.CTkLabel(win, text="✕  检测失败",
+                 font=ctk.CTkFont(size=15, weight="bold"),
+                 text_color=WARN).pack(padx=28, pady=(20, 4), anchor="w")
+    ctk.CTkFrame(win, height=1, fg_color=BORDER).pack(fill="x", padx=24, pady=(0, 12))
+    tk.Label(win, text="无法连接网络，请检查网络连接后重试。",
+             bg=CARD, fg=TEXT2, font=("Microsoft YaHei UI", 11)).pack(padx=28, pady=(4, 16), anchor="w")
+    _close_btn(win)
+    _dlg_center(win, root)
 
 # ════════════════════════════════════════════════════════════════
 #  工具函数
@@ -168,6 +297,19 @@ def parse_hm(raw: str):
     return 8, 0
 
 
+def parse_hm_pair(eh, em):
+    """从小时/分钟两个 Entry 读取并校验，返回 (h, m)。"""
+    try:
+        h = max(0, min(23, int(eh.get().strip())))
+    except Exception:
+        h = 8
+    try:
+        mi = max(0, min(59, int(em.get().strip())))
+    except Exception:
+        mi = 0
+    return h, mi
+
+
 def random_time(bh, bm, mn, mx):
     delta = random.randint(mn, mx) * random.choice([-1, 1])
     total = max(0, min(23*60+59, bh*60+bm+delta))
@@ -177,6 +319,7 @@ def random_time(bh, bm, mn, mx):
 def distribute_times(n: int) -> list:
     if n <= 0: return []
     if n == 1: return [(13, 0)]
+    if n == 4: return [(8, 0), (13, 0), (18, 20), (22, 0)]
     s, e = 8*60, 22*60
     return [divmod(round(s + i*(e-s)/(n-1)), 60) for i in range(n)]
 
@@ -400,6 +543,117 @@ def _set_window_icon(root: tk.Tk):
 
 
 # ════════════════════════════════════════════════════════════════
+#  自定义确认弹窗（替代 messagebox.askyesno）
+# ════════════════════════════════════════════════════════════════
+
+class ConfirmDialog(ctk.CTkToplevel):
+    def __init__(self, master, message: str):
+        super().__init__(master)
+        self.title("确认重命名")
+        self.geometry("360x196")
+        self.configure(fg_color=BG)
+        self.resizable(False, False)
+        self.grab_set()
+        self.result = False
+
+        # 图标行
+        icon_row = ctk.CTkFrame(self, fg_color="transparent")
+        icon_row.pack(padx=22, pady=(20, 0), anchor="w")
+        ic = tk.Canvas(icon_row, width=32, height=32,
+                       bg=BG, highlightthickness=0)
+        ic.pack(side="left", padx=(0, 10))
+        ic.create_oval(1, 1, 31, 31, fill=ACCENT, outline="")
+        ic.create_text(16, 17, text="?", fill="#FFF",
+                       font=("Arial", 16, "bold"))
+        ctk.CTkLabel(icon_row, text=message,
+                     font=ctk.CTkFont(size=12),
+                     text_color=TEXT, wraplength=255,
+                     justify="left").pack(side="left")
+
+        btn_row = ctk.CTkFrame(self, fg_color="transparent")
+        btn_row.pack(pady=(18, 0))
+        ctk.CTkButton(btn_row, text="取消", width=96, height=34,
+                       fg_color=CARD2, hover_color=BORDER,
+                       border_width=1, border_color=BORDER,
+                       text_color=DIM, corner_radius=8,
+                       font=ctk.CTkFont(size=12),
+                       command=self._no).pack(side="left", padx=6)
+        ctk.CTkButton(btn_row, text="确认重命名", width=120, height=34,
+                       fg_color=ACCENT, hover_color=ACCENT2,
+                       corner_radius=8,
+                       font=ctk.CTkFont(size=12, weight="bold"),
+                       command=self._yes).pack(side="left", padx=6)
+
+        self.update_idletasks()
+        try:
+            mx = master.winfo_rootx()
+            my = master.winfo_rooty()
+            mw = master.winfo_width()
+            mh = master.winfo_height()
+            x = mx + (mw - self.winfo_width()) // 2
+            y = my + (mh - self.winfo_height()) // 2
+            self.geometry(f"+{x}+{y}")
+        except Exception:
+            pass
+
+    def _yes(self):
+        self.result = True
+        self.destroy()
+
+    def _no(self):
+        self.result = False
+        self.destroy()
+
+
+# ════════════════════════════════════════════════════════════════
+#  部分失败错误弹窗（替代 messagebox.showerror）
+# ════════════════════════════════════════════════════════════════
+
+class ErrDialog(ctk.CTkToplevel):
+    def __init__(self, master, ok: int, fail: list):
+        super().__init__(master)
+        self.title("部分失败")
+        self.geometry("460x300")
+        self.configure(fg_color=BG)
+        self.resizable(False, False)
+        self.grab_set()
+
+        ctk.CTkLabel(self, text=f"成功 {ok} 个，失败 {len(fail)} 个",
+                     font=ctk.CTkFont(size=13, weight="bold"),
+                     text_color=WARN).pack(padx=16, pady=(14, 5), anchor="w")
+
+        box = ctk.CTkTextbox(self, font=("Consolas", 11),
+                              fg_color=CARD, text_color=TEXT,
+                              corner_radius=8, border_width=1,
+                              border_color=BORDER, height=160)
+        box.pack(fill="x", padx=16, pady=(0, 10))
+        for item in fail[:8]:
+            box.insert(tk.END, f"  {item}\n")
+        if len(fail) > 8:
+            box.insert(tk.END, f"  … 还有 {len(fail)-8} 个\n")
+        box.configure(state="disabled")
+
+        ctk.CTkButton(self, text="关闭", width=90, height=32,
+                       fg_color=CARD2, hover_color=BORDER,
+                       border_width=1, border_color=BORDER,
+                       text_color=DIM, corner_radius=8,
+                       font=ctk.CTkFont(size=12),
+                       command=self.destroy).pack(pady=(0, 14))
+
+        self.update_idletasks()
+        try:
+            mx = master.winfo_rootx()
+            my = master.winfo_rooty()
+            mw = master.winfo_width()
+            mh = master.winfo_height()
+            x = mx + (mw - self.winfo_width()) // 2
+            y = my + (mh - self.winfo_height()) // 2
+            self.geometry(f"+{x}+{y}")
+        except Exception:
+            pass
+
+
+# ════════════════════════════════════════════════════════════════
 #  冲突检测弹窗
 # ════════════════════════════════════════════════════════════════
 
@@ -588,16 +842,17 @@ class FileListWidget(ctk.CTkFrame):
         bar.pack(fill="x", padx=7, pady=(7,3))
         ctk.CTkButton(bar, text="＋ 添加文件", width=96, height=28,
                        fg_color=ACCENT, hover_color=ACCENT2,
-                       corner_radius=6, font=ctk.CTkFont(size=11),
+                       corner_radius=6, font=ctk.CTkFont(size=12, weight="bold"),
                        command=self._pick).pack(side="left", padx=(0,5))
         ctk.CTkButton(bar, text="清空", width=48, height=28,
                        fg_color=CARD2, hover_color=BORDER,
                        border_width=1, border_color=BORDER,
-                       text_color=DIM, corner_radius=6,
+                       text_color=TEXT, corner_radius=6,
+                       font=ctk.CTkFont(size=12, weight="bold"),
                        command=self._clear).pack(side="left")
         if DND_AVAILABLE:
-            ctk.CTkLabel(bar, text="  ✦ 支持拖入", text_color=DIM,
-                         font=ctk.CTkFont(size=10)).pack(side="left", padx=3)
+            ctk.CTkLabel(bar, text="  ✦ 支持拖入", text_color=TEXT2,
+                         font=ctk.CTkFont(size=11)).pack(side="left", padx=3)
         self._cnt = ctk.CTkLabel(bar, text="0 个文件", text_color=TEAL,
                                   font=ctk.CTkFont(size=11, weight="bold"))
         self._cnt.pack(side="right")
@@ -690,7 +945,7 @@ class PostNamingPanel(ctk.CTkFrame):
         self.grid_columnconfigure(1, weight=65)
         self.grid_rowconfigure(0, weight=1)
 
-        # 左侧设置
+        # ── 左侧：日期/发帖/时间/命名规则(仅排序) ──────────────
         left = ctk.CTkScrollableFrame(
             self, fg_color=CARD, corner_radius=12,
             border_width=1, border_color=BORDER,
@@ -705,28 +960,41 @@ class PostNamingPanel(ctk.CTkFrame):
         self._sec(left, "time",  "发帖时间")
         self._build_time(left)
         self._sec(left, "rule",  "命名规则")
-        self._build_options(left)
+        self._build_sort_only(left)
 
-        # 右侧文件列表
-        right = ctk.CTkFrame(self, fg_color=CARD, corner_radius=12,
-                              border_width=1, border_color=BORDER)
-        right.grid(row=0, column=1, sticky="nsew")
-        right.grid_rowconfigure(1, weight=1)
-        right.grid_columnconfigure(0, weight=1)
+        # ── 右侧容器 ────────────────────────────────────────────
+        right_col = ctk.CTkFrame(self, fg_color="transparent")
+        right_col.grid(row=0, column=1, sticky="nsew")
+        right_col.grid_rowconfigure(0, weight=0)
+        right_col.grid_rowconfigure(1, weight=1)
+        right_col.grid_columnconfigure(0, weight=1)
 
-        hdr = ctk.CTkFrame(right, fg_color="transparent")
-        hdr.grid(row=0, column=0, sticky="ew", padx=12, pady=(11,4))
+        # 右上：命名模式 + 示例
+        top_card = ctk.CTkFrame(right_col, fg_color=CARD, corner_radius=12,
+                                border_width=1, border_color=BORDER)
+        top_card.grid(row=0, column=0, sticky="ew", pady=(0, 7))
+        self._build_naming_mode(top_card)
+
+        # 右下：文件列表
+        bot_card = ctk.CTkFrame(right_col, fg_color=CARD, corner_radius=12,
+                                border_width=1, border_color=BORDER)
+        bot_card.grid(row=1, column=0, sticky="nsew")
+        bot_card.grid_rowconfigure(1, weight=1)
+        bot_card.grid_columnconfigure(0, weight=1)
+
+        hdr = ctk.CTkFrame(bot_card, fg_color="transparent")
+        hdr.grid(row=0, column=0, sticky="ew", padx=12, pady=(11, 4))
         ctk.CTkLabel(hdr, text="视频文件列表",
                      font=ctk.CTkFont(size=13, weight="bold"),
                      text_color=TEXT).pack(side="left")
         ctk.CTkLabel(hdr, text="mp4  mov  avi  mkv …",
                      text_color=DIM, font=ctk.CTkFont(size=10)).pack(side="right")
 
-        self.file_list = FileListWidget(right, VIDEO_EXTS)
-        self.file_list.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0,5))
+        self.file_list = FileListWidget(bot_card, VIDEO_EXTS)
+        self.file_list.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 5))
 
-        btn_row = ctk.CTkFrame(right, fg_color="transparent")
-        btn_row.grid(row=2, column=0, pady=(0,12))
+        btn_row = ctk.CTkFrame(bot_card, fg_color="transparent")
+        btn_row.grid(row=2, column=0, pady=(0, 12))
         ctk.CTkButton(btn_row, text="👁  预览", width=108, height=34,
                        fg_color=TEAL, hover_color=TEAL2, corner_radius=8,
                        font=ctk.CTkFont(size=13, weight="bold"),
@@ -772,9 +1040,9 @@ class PostNamingPanel(ctk.CTkFrame):
         self._date_btn.pack(side="left")
         ctk.CTkButton(row, text="今天", width=50, height=32,
                        fg_color=CARD, hover_color=CARD2,
-                       text_color=DIM, corner_radius=8,
+                       text_color=TEXT, corner_radius=8,
                        border_width=1, border_color=BORDER,
-                       font=ctk.CTkFont(size=11),
+                       font=ctk.CTkFont(size=12, weight="bold"),
                        command=self._reset_date).pack(side="left", padx=7)
 
     def _open_cal(self):
@@ -794,9 +1062,9 @@ class PostNamingPanel(ctk.CTkFrame):
     def _build_ppd(self, p):
         row = ctk.CTkFrame(p, fg_color="transparent")
         row.pack(fill="x", padx=10, pady=(0,6))
-        ctk.CTkLabel(row, text="每天发", text_color=DIM,
-                     font=ctk.CTkFont(size=12)).pack(side="left")
-        self.ppd_var = tk.StringVar(value="3 贴")
+        ctk.CTkLabel(row, text="每天发", text_color=TEXT,
+                     font=ctk.CTkFont(size=12, weight="bold")).pack(side="left")
+        self.ppd_var = tk.StringVar(value="4 贴")
         ctk.CTkOptionMenu(
             row, variable=self.ppd_var,
             values=[f"{i} 贴" for i in range(1,9)],
@@ -807,7 +1075,7 @@ class PostNamingPanel(ctk.CTkFrame):
             command=lambda _: self._refresh_slots()
         ).pack(side="left", padx=7)
         ctk.CTkLabel(row, text="自动分配时间",
-                     text_color=DIM, font=ctk.CTkFont(size=10)).pack(side="left")
+                     text_color=TEXT, font=ctk.CTkFont(size=12, weight="bold")).pack(side="left")
 
     # ── 发帖时间 ──────────────────────────────────────────────────
     def _build_time(self, p):
@@ -815,8 +1083,8 @@ class PostNamingPanel(ctk.CTkFrame):
         vrow.pack(fill="x", padx=10, pady=(0,7))
         ir = ctk.CTkFrame(vrow, fg_color="transparent")
         ir.pack(fill="x", padx=10, pady=7)
-        ctk.CTkLabel(ir, text="随机波动", text_color=DIM,
-                     font=ctk.CTkFont(size=12)).pack(side="left")
+        ctk.CTkLabel(ir, text="随机波动", text_color=TEXT,
+                     font=ctk.CTkFont(size=12, weight="bold")).pack(side="left")
         self.v_mn = ctk.CTkEntry(ir, width=42, height=26)
         self.v_mn.insert(0, "5")
         self.v_mn.pack(side="left", padx=(7,0))
@@ -824,11 +1092,11 @@ class PostNamingPanel(ctk.CTkFrame):
         self.v_mx = ctk.CTkEntry(ir, width=42, height=26)
         self.v_mx.insert(0, "20")
         self.v_mx.pack(side="left")
-        ctk.CTkLabel(ir, text=" 分钟", text_color=DIM,
-                     font=ctk.CTkFont(size=11)).pack(side="left")
+        ctk.CTkLabel(ir, text=" 分钟", text_color=TEXT,
+                     font=ctk.CTkFont(size=12, weight="bold")).pack(side="left")
         self.slots_wrap = ctk.CTkFrame(p, fg_color="transparent")
         self.slots_wrap.pack(fill="x", padx=10)
-        self.time_entries = []
+        self.time_entries = []   # 每项为 (h_entry, m_entry)
         self._refresh_slots()
 
     def _refresh_slots(self):
@@ -841,40 +1109,83 @@ class PostNamingPanel(ctk.CTkFrame):
             row.pack(fill="x", pady=2)
             ctk.CTkLabel(row, text=f"第 {CN_NUMS[i]} 帖",
                          text_color=ACCENT,
-                         font=ctk.CTkFont(size=11, weight="bold"),
-                         width=48, anchor="e").pack(side="left")
-            e = ctk.CTkEntry(row, width=66, height=26,
-                              placeholder_text="HH:MM")
-            e.insert(0, f"{h:02d}:{m:02d}")
-            e.pack(side="left", padx=7)
+                         font=ctk.CTkFont(size=13, weight="bold"),
+                         width=52, anchor="e").pack(side="left")
+            # 小时输入框
+            eh = ctk.CTkEntry(row, width=40, height=26,
+                               placeholder_text="HH")
+            eh.insert(0, f"{h:02d}")
+            eh.pack(side="left", padx=(7, 0))
+            # 固定冒号
+            ctk.CTkLabel(row, text="：", text_color=TEXT,
+                         font=ctk.CTkFont(size=14, weight="bold")).pack(side="left", padx=1)
+            # 分钟输入框
+            em = ctk.CTkEntry(row, width=40, height=26,
+                               placeholder_text="MM")
+            em.insert(0, f"{m:02d}")
+            em.pack(side="left", padx=(0, 5))
             ctk.CTkLabel(row, text="24h制", text_color=DIM,
                          font=ctk.CTkFont(size=10)).pack(side="left")
-            self.time_entries.append(e)
+            self.time_entries.append((eh, em))
 
-    # ── 命名规则 ──────────────────────────────────────────────────
-    def _build_options(self, p):
-        ctk.CTkLabel(p, text="文件排序方式", text_color=DIM,
-                     font=ctk.CTkFont(size=11)).pack(
-            anchor="w", padx=10, pady=(0,4))
+    # ── 左侧命名规则区：仅文件排序（上下摆放）──────────────────
+    def _build_sort_only(self, p):
+        ctk.CTkLabel(p, text="文件排序",
+                     text_color=TEXT2,
+                     font=ctk.CTkFont(size=13, weight="bold")).pack(
+            anchor="w", padx=10, pady=(0, 4))
         self.sort_var = tk.StringVar(value="按创建时间")
         sf = ctk.CTkFrame(p, fg_color="transparent")
-        sf.pack(fill="x", padx=10, pady=(0,4))
-        for val, tip in [("按创建时间","按文件创建时间先后排序"),
-                          ("随机打乱","随机打乱顺序")]:
-            ctk.CTkRadioButton(sf, text=val, variable=self.sort_var, value=val,
+        sf.pack(fill="x", padx=10, pady=(0, 10))
+        for val, label in [("按创建时间", "创建时间"), ("随机打乱", "随机打乱")]:
+            ctk.CTkRadioButton(sf, text=label,
+                                variable=self.sort_var, value=val,
                                 fg_color=ACCENT, hover_color=ACCENT2,
                                 font=ctk.CTkFont(size=12)).pack(anchor="w", pady=2)
-            ctk.CTkLabel(sf, text=f"    {tip}", text_color=DIM,
-                         font=ctk.CTkFont(size=10)).pack(anchor="w", pady=(0,2))
-        ctk.CTkFrame(p, height=1, fg_color=BORDER).pack(
-            fill="x", padx=10, pady=(5,7))
-        ctk.CTkLabel(p, text="命名格式示例：",
-                     text_color=DIM, font=ctk.CTkFont(size=11)).pack(
-            anchor="w", padx=10, pady=(0,2))
-        ctk.CTkLabel(p, text="  0420-第 1 帖-08：36.mp4",
+
+    # ── 右上：命名模式 + 示例 ────────────────────────────────────
+    def _build_naming_mode(self, parent):
+        ctk.CTkLabel(parent, text="命名模式",
+                     text_color=TEXT2,
+                     font=ctk.CTkFont(size=13, weight="bold")).pack(
+            anchor="w", padx=14, pady=(12, 4))
+
+        self.naming_mode = tk.StringVar(value="B")
+
+        ctk.CTkRadioButton(parent, text="模式 A  · 完整重命名",
+                            variable=self.naming_mode, value="A",
+                            fg_color=ACCENT, hover_color=ACCENT2,
+                            font=ctk.CTkFont(size=12),
+                            command=self._refresh_example).pack(
+            anchor="w", padx=14, pady=(0, 4))
+
+        ctk.CTkRadioButton(parent, text="模式 B  · 保留原文件名",
+                            variable=self.naming_mode, value="B",
+                            fg_color=ACCENT, hover_color=ACCENT2,
+                            font=ctk.CTkFont(size=12),
+                            command=self._refresh_example).pack(
+            anchor="w", padx=14, pady=(0, 8))
+
+        ctk.CTkFrame(parent, height=1, fg_color=BORDER).pack(
+            fill="x", padx=14, pady=(0, 6))
+
+        ex_row = ctk.CTkFrame(parent, fg_color="transparent")
+        ex_row.pack(fill="x", padx=14, pady=(0, 12))
+        ctk.CTkLabel(ex_row, text="示例：",
+                     text_color=DIM, font=ctk.CTkFont(size=11)).pack(side="left")
+        self._example_lbl = ctk.CTkLabel(ex_row, text="",
                      text_color=ACCENT,
                      font=ctk.CTkFont(size=11, weight="bold"),
-                     justify="left").pack(anchor="w", padx=10, pady=(0,12))
+                     justify="left", anchor="w")
+        self._example_lbl.pack(side="left")
+        self._refresh_example()
+
+    def _refresh_example(self):
+        SEP = '\u00b7\u00b7\u00b7'
+        if self.naming_mode.get() == "A":
+            self._example_lbl.configure(text=f"  0420-第 1 帖-08：36.mp4")
+        else:
+            self._example_lbl.configure(text=f"  0420-第 1 帖-08：36{SEP}原文件名.mp4")
 
     # ── 逻辑 ──────────────────────────────────────────────────────
     def _toast(self, msg, kind="success"):
@@ -892,10 +1203,24 @@ class PostNamingPanel(ctk.CTkFrame):
             return None
         return self._sel_month, self._sel_day, ppd, mn, mx
 
+    # 匹配本工具生成的前缀格式：MMDD-第 N 帖[-HH：MM]···
+    _PREFIX_RE = re.compile(
+        r'^\d{4}-第\s[1-8]\s帖(?:-\d{2}[：:]\d{2})?\u00b7\u00b7\u00b7')
+
+    def _strip_tool_prefix(self, stem: str) -> str:
+        """若文件名已含本工具前缀(···分隔)，剥离并返回原始部分；否则原样返回。"""
+        SEP = '\u00b7\u00b7\u00b7'  # ···
+        if self._PREFIX_RE.match(stem):
+            idx = stem.find(SEP)
+            if idx != -1:
+                return stem[idx + 3:]
+        return stem
+
     def _compute(self):
         p = self._get_params()
         if not p: return []
         month, day, ppd, mn, mx = p
+        mode_b = self.naming_mode.get() == "B"
         if self.sort_var.get() == "随机打乱":
             files = self.file_list.files[:]
             random.shuffle(files)
@@ -904,7 +1229,7 @@ class PostNamingPanel(ctk.CTkFrame):
         if not files:
             self._toast("请先添加视频文件", "warn")
             return []
-        slots  = [parse_hm(e.get()) for e in self.time_entries]
+        slots  = [parse_hm_pair(eh, em) for eh, em in self.time_entries]
         result = []
         offset = 0
         for idx, f in enumerate(files):
@@ -915,10 +1240,16 @@ class PostNamingPanel(ctk.CTkFrame):
             cn    = CN_NUMS[si]
             if si < len(slots):
                 rh, rm = random_time(*slots[si], mn, mx)
-                stem = f"{pfx}-第 {cn} 帖-{rh:02d}{FC}{rm:02d}"
+                tool_pfx = f"{pfx}-第 {cn} 帖-{rh:02d}{FC}{rm:02d}"
             else:
-                stem = f"{pfx}-第 {cn} 帖"
-            result.append((f, stem + f.suffix.lower()))
+                tool_pfx = f"{pfx}-第 {cn} 帖"
+            if mode_b:
+                orig = self._strip_tool_prefix(f.stem)
+                SEP = '\u00b7\u00b7\u00b7'  # ···
+                new_name = f"{tool_pfx}{SEP}{orig}{f.suffix.lower()}"
+            else:
+                new_name = tool_pfx + f.suffix.lower()
+            result.append((f, new_name))
         return result
 
     def _preview(self):
@@ -928,15 +1259,19 @@ class PostNamingPanel(ctk.CTkFrame):
     def _execute(self):
         pairs = self._compute()
         if not pairs: return
-        if not messagebox.askyesno("确认重命名",
-                                    f"即将重命名 {len(pairs)} 个文件，确认继续？"):
+        mode = self.naming_mode.get()
+        mode_hint = "模式 A（完整重命名）" if mode == "A" else "模式 B（保留原文件名）"
+        msg = f"即将重命名 {len(pairs)} 个文件\n当前命名模式：{mode_hint}\n\n确认继续？"
+        dlg = ConfirmDialog(self, msg)
+        self.wait_window(dlg)
+        if not dlg.result:
             return
         conflicts = [new for old, new in pairs if (old.parent/new).exists()]
         strategy  = "overwrite"
         if conflicts:
-            dlg = ConflictDialog(self, conflicts)
-            self.wait_window(dlg)
-            strategy = dlg.result
+            dlg2 = ConflictDialog(self, conflicts)
+            self.wait_window(dlg2)
+            strategy = dlg2.result
             if strategy == "cancel": return
         ok, skipped, fail = two_pass_rename(pairs, strategy)
         self.file_list.clear()
@@ -944,8 +1279,7 @@ class PostNamingPanel(ctk.CTkFrame):
         if skipped: msg += f"（跳过 {skipped} 个）"
         if fail:
             self._toast(f"部分失败：{len(fail)} 个文件未重命名", "error")
-            messagebox.showerror("部分失败",
-                f"成功 {ok} 个，失败 {len(fail)} 个\n\n"+"\n".join(fail[:8]))
+            ErrDialog(self, ok, fail)
         else:
             self._toast(msg, "success")
 
@@ -959,7 +1293,7 @@ class App:
     def __init__(self):
         root_cls  = TkinterDnD.Tk if DND_AVAILABLE else tk.Tk
         self.root = root_cls()
-        self.root.title("视频排贴命名工具  v1.0")
+        self.root.title("视频排贴命名工具  v1.1.1")
         self.root.minsize(780, 500)
         _set_window_icon(self.root)
         self._build()
@@ -977,7 +1311,7 @@ class App:
         topbar.grid(row=0, column=0, sticky="ew")
         topbar.pack_propagate(False)
 
-        # 软件名 + 主题图标（紧跟标题后，完全不受右侧约束影响）
+        # 软件名 + 主题开关（紧跟标题后）
         left_row = tk.Frame(topbar, bg=TOPBAR)
         left_row.pack(side="left", fill="y", padx=(20, 0))
 
@@ -987,28 +1321,24 @@ class App:
                   anchor="w").pack(side="left", fill="y")
 
         # 两格间距
-        tk.Frame(left_row, bg=TOPBAR, width=12).pack(side="left")
+        tk.Frame(left_row, bg=TOPBAR, width=14).pack(side="left")
 
-        # 主题图标按钮（26×26 圆角块，紧跟标题）
-        IC_BTN = 26
-        tbtn = tk.Frame(left_row, bg=TBTN_BG,
-                         highlightbackground=TBTN_BD, highlightthickness=1)
-        tbtn.pack(side="left", anchor="c")
-
-        self._tic = tk.Canvas(tbtn, width=IC_BTN, height=IC_BTN,
-                               bg=TBTN_BG, highlightthickness=0, cursor="hand2")
-        self._tic.pack(padx=4, pady=4)
-        self._refresh_tbtn()
-
-        for w in (tbtn, self._tic):
-            w.bind("<Button-1>", lambda e: self._toggle_theme())
+        # 胶囊滑块开关
+        TRACK_W, TRACK_H = 54, 26
+        KNOB_D = 20
+        self._toggle_cv = tk.Canvas(
+            left_row, width=TRACK_W, height=TRACK_H,
+            bg=TOPBAR, highlightthickness=0, cursor="hand2")
+        self._toggle_cv.pack(side="left", anchor="center")
+        self._draw_toggle()
+        self._toggle_cv.bind("<Button-1>", lambda e: self._toggle_theme())
 
         # 版本徽章（右侧）
-        ver_btn = tk.Label(topbar, text="  v 1.0  ",
+        ver_btn = tk.Label(topbar, text="  v1.1.1  ",
                             bg=ACCENT, fg="#FFF",
                             font=("Consolas", 9, "bold"), cursor="hand2")
         ver_btn.pack(side="right", padx=14, pady=14)
-        ver_btn.bind("<Button-1>", lambda e: self._show_changelog())
+        ver_btn.bind("<Button-1>", lambda e: self._on_ver_btn_click())
         ver_btn.bind("<Enter>",    lambda e: ver_btn.configure(bg=ACCENT2))
         ver_btn.bind("<Leave>",    lambda e: ver_btn.configure(bg=ACCENT))
 
@@ -1032,31 +1362,92 @@ class App:
                 self.root.dnd_bind("<<Drop>>", lambda e: None)
             except Exception: pass
 
-    def _refresh_tbtn(self):
-        """更新主题图标（26×26，月牙/太阳，无文字）"""
-        cv = self._tic
-        cv.configure(bg=TBTN_BG)
+    def _draw_toggle(self):
+        """绘制胶囊形主题切换开关，亮色=左太阳，暗色=右月亮"""
+        cv = self._toggle_cv
+        cv.configure(bg=TOPBAR)
         cv.delete("all")
-        c = TBTN_FG
+
+        TW, TH = 54, 26
+        KD = 20          # 圆形滑块直径
+        R  = TH // 2     # 胶囊圆角半径
+
         if _CURRENT == "light":
-            # 月牙：用多边形近似，确保完整显示在 26×26 内
-            # 大圆填充扇形
-            cv.create_arc(4, 4, 22, 22, start=50, extent=220,
-                           fill=c, outline="", style="chord")
-            # 遮罩圆（同背景色）挖出月牙效果
-            cv.create_oval(9, 3, 23, 17, fill=TBTN_BG, outline=TBTN_BG)
+            track_bg  = "#E0D8D0"
+            knob_bg   = "#FFFFFF"
+            knob_x    = R           # 左侧
         else:
-            # 太阳：中心圆 + 8 条射线，全部在 26×26 内
-            cx, cy = 13, 13
-            cv.create_oval(cx-4, cy-4, cx+4, cy+4, fill=c, outline="")
+            track_bg  = "#3A3330"
+            knob_bg   = "#2A2522"
+            knob_x    = TW - R      # 右侧
+
+        # 胶囊轨道
+        cv.create_arc(0, 0, TH, TH, start=90, extent=180,
+                       fill=track_bg, outline=track_bg)
+        cv.create_arc(TW-TH, 0, TW, TH, start=270, extent=180,
+                       fill=track_bg, outline=track_bg)
+        cv.create_rectangle(R, 0, TW-R, TH, fill=track_bg, outline=track_bg)
+
+        # 圆形滑块
+        kx1 = knob_x - KD//2
+        ky1 = (TH - KD) // 2
+        cv.create_oval(kx1, ky1, kx1+KD, ky1+KD,
+                        fill=knob_bg, outline="#C8C0B8", width=1)
+
+        # 图标（中心）
+        cx, cy = knob_x, TH // 2
+        if _CURRENT == "light":
+            # 太阳图标（12px，橙棕色）
+            ic = TBTN_FG
+            r_inner, r_outer = 3, 5
+            cv.create_oval(cx-r_inner, cy-r_inner,
+                            cx+r_inner, cy+r_inner, fill=ic, outline="")
             for i in range(8):
                 a = math.radians(i * 45)
-                x1 = cx + 6.5*math.cos(a)
-                y1 = cy - 6.5*math.sin(a)
-                x2 = cx + 9.5*math.cos(a)
-                y2 = cy - 9.5*math.sin(a)
+                x1 = cx + (r_inner+1.5)*math.cos(a)
+                y1 = cy - (r_inner+1.5)*math.sin(a)
+                x2 = cx + r_outer*math.cos(a)
+                y2 = cy - r_outer*math.sin(a)
                 cv.create_line(x1, y1, x2, y2,
-                                fill=c, width=2, capstyle="round")
+                                fill=ic, width=1.5, capstyle="round")
+        else:
+            # 月牙图标（白色）
+            ic = "#C8BCB4"
+            cv.create_arc(cx-5, cy-5, cx+5, cy+5,
+                           start=50, extent=220,
+                           fill=ic, outline="", style="chord")
+            cv.create_oval(cx-1, cy-5, cx+5, cy+1,
+                            fill=knob_bg, outline=knob_bg)
+
+    def _set_ver_btn(self, state: str, latest=None, url=None):
+        """更新版本按钮外观。state: none | has_update | latest"""
+        self._update_state  = state
+        self._update_latest = latest
+        self._update_url    = url
+        btn = self._ver_btn
+        if state == "has_update":
+            btn.configure(text="  有可用更新  ", bg="#D97706", fg="#FFFFFF")
+        elif state == "latest":
+            btn.configure(text=f"  当前最新版 {CURRENT_VERSION}  ", bg=CARD2, fg=GREEN)
+        else:
+            btn.configure(text=f"  {CURRENT_VERSION}  ", bg=TBTN_BG, fg=TBTN_FG)
+
+    def _ver_btn_hover(self, entering: bool):
+        btn = self._ver_btn
+        s = self._update_state
+        if s == "has_update":
+            btn.configure(bg="#B45309" if entering else "#D97706")
+        elif s == "latest":
+            btn.configure(bg=BORDER if entering else CARD2)
+        else:
+            btn.configure(bg=TBTN_BD if entering else TBTN_BG)
+
+    def _on_ver_btn_click(self):
+        if self._update_state == "has_update":
+            _dlg_update(self.root, self._update_latest, self._update_url)
+        else:
+            self._ver_btn.configure(text="  检测中…  ", bg=TBTN_BG, fg=DIM)
+            check_update_manual(self.root, self._set_ver_btn)
 
     def _toggle_theme(self):
         new = "dark" if _CURRENT == "light" else "light"
@@ -1076,8 +1467,14 @@ class App:
                      text_color=ACCENT).pack(padx=24, pady=(16,4), anchor="w")
         ctk.CTkFrame(win, height=1, fg_color=BORDER).pack(
             fill="x", padx=24, pady=(0,10))
-        CHANGELOG = [("v1.0  —  当前版本", ACCENT, [
-            "全新独立发布：视频排贴命名工具 · 专为 FB 视频排贴命名设计",
+        CHANGELOG = [("v1.1.1  —  当前版本", ACCENT, [
+            "版本徽章合并更新检测，启动自动静默检查，有更新变橙色，已最新变绿色",
+            "主题切换改为胶囊滑块开关（亮色太阳 / 暗色月亮）",
+            "新增命名模式：模式 A 完整重命名 / 模式 B 保留原文件名，默认模式 B",
+            "确认弹窗显示当前命名模式",
+            "命名规则区布局优化，文件排序上下排列，命名模式移至右侧",
+        ]), ("v1.0", DIM, [
+             "全新发布：视频排贴命名工具 · 专为 FB 视频排贴命名设计",
             "专为 Facebook 资源视频排贴设计，按日期 + 帖次 + 时间自动命名",
             "支持自定义每日发帖数（1 ~ 8 贴）及随机时间波动范围",
             "内置日历选择器，精准控制起始发布日期",
@@ -1112,6 +1509,7 @@ class App:
 
     def run(self):
         self.root.geometry("1000x1030")
+        self.root.after(2000, lambda: check_update_silent(self.root, self._set_ver_btn))
         self.root.mainloop()
 
 
